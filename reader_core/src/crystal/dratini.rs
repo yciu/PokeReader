@@ -1,5 +1,5 @@
-//! English VC only. Observer, calibrated timing assistant and read-only verifier.
-//! Never calls a game-memory write API or installs a hook.
+//! English VC manual timing assistant and read-only verifier.
+//! Called only from the overlay frame path; no RNG or pause-hook observer.
 use super::{dratini_rng::*, hook, reader::Gen2Reader};
 use crate::{
     pnp::{self, Button},
@@ -7,14 +7,10 @@ use crate::{
 };
 use once_cell::unsync::Lazy;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum Status {
     Idle,
-    Needed,
-    Calibrating,
-    Found,
-    Approaching,
-    Ready,
+    Manual,
     Verifying,
     Success,
     Failed,
@@ -23,11 +19,7 @@ impl Status {
     fn name(self) -> &'static str {
         match self {
             Self::Idle => "IDLE",
-            Self::Needed => "CALIBRATION NEEDED",
-            Self::Calibrating => "CALIBRATING",
-            Self::Found => "TARGET FOUND",
-            Self::Approaching => "APPROACHING",
-            Self::Ready => "READY",
+            Self::Manual => "MANUAL TIMING",
             Self::Verifying => "VERIFYING",
             Self::Success => "SUCCESS",
             Self::Failed => "FAILED / MANUAL CONTROL",
@@ -35,37 +27,30 @@ impl Status {
     }
 }
 
+/// Overlay-frame observation, NOT the state at A or at either gift Random call.
 #[derive(Clone, Copy)]
 struct Snapshot {
-    rng: Rng,
+    state: u16,
     advance: u32,
+    adiv: (Option<usize>, u8),
+    sdiv: (Option<usize>, u8),
 }
-fn snapshot(reader: &Gen2Reader) -> Option<Snapshot> {
+fn snapshot(reader: &Gen2Reader) -> Snapshot {
     let div = hook::measured_div();
-    Some(Snapshot {
-        rng: Rng {
-            state: reader.rng_state(),
-            add: Div {
-                index: hook::add_div_tracker().index()? as u16,
-                value: (div >> 8) as u8,
-            },
-            sub: Div {
-                index: hook::sub_div_tracker().index()? as u16,
-                value: div as u8,
-            },
-        },
+    Snapshot {
+        state: reader.rng_state(),
         advance: hook::rng_advance(),
-    })
+        adiv: (hook::add_div_tracker().index(), (div >> 8) as u8),
+        sdiv: (hook::sub_div_tracker().index(), div as u8),
+    }
 }
 
-struct Trace {
+#[derive(Clone, Copy)]
+struct Observation {
     start: Snapshot,
-    before: Option<Snapshot>,
-    reads: [u8; 4],
-    count: usize,
-    bad: bool,
+    end: Snapshot,
+    dvs: Dvs,
 }
-
 struct Helper {
     status: Status,
     note: &'static str,
@@ -73,39 +58,31 @@ struct Helper {
     row: u8,
     details: bool,
     preset: u8,
-    calibration: Calibration,
-    context: Option<u64>,
     party_count: u8,
-    armed: bool,
-    trace: Option<Trace>,
-    search: Option<Search>,
-    target: Option<Target>,
-    previous: Option<Snapshot>,
+    start_snapshot: Option<Snapshot>,
     elapsed: u32,
-    last_sample: Option<Sample>,
+    last_advance: u32,
+    last_sample: Option<Observation>,
 }
 impl Default for Helper {
     fn default() -> Self {
         Self {
             status: Status::Idle,
-            note: "English Crystal VC - timing only",
+            note: "English Crystal VC - manual timing",
             filter: Filter::default(),
             row: 0,
             details: false,
             preset: 0,
-            calibration: Calibration::default(),
-            context: None,
             party_count: 0,
-            armed: false,
-            trace: None,
-            search: None,
-            target: None,
-            previous: None,
+            start_snapshot: None,
             elapsed: 0,
+            last_advance: 0,
             last_sample: None,
         }
     }
 }
+// Same single-threaded overlay ownership as the existing Crystal UI. No RNG
+// observer or pause-resume callback accesses this state.
 unsafe fn helper() -> &'static mut Helper {
     static mut STATE: Lazy<Helper> = Lazy::new(Helper::default);
     Lazy::force_mut(&mut STATE)
@@ -113,23 +90,15 @@ unsafe fn helper() -> &'static mut Helper {
 pub fn english() -> bool {
     matches!(loaded_title(), Ok(LoadedTitle::CrystalEn))
 }
-
 impl Helper {
     fn stop(&mut self, note: &'static str) {
         self.status = Status::Failed;
         self.note = note;
-        self.armed = false;
-        self.trace = None;
-        self.search = None;
-        self.target = None;
-        self.previous = None;
+        self.start_snapshot = None;
     }
     fn start(&mut self, reader: &Gen2Reader) {
-        if let Err(reason) = preflight(
-            reader.party_count(),
-            reader.dratini_received(),
-            reader.dratini_prompt(),
-        ) {
+        let count = reader.party_count();
+        if let Err(reason) = preflight(count, reader.dratini_received(), reader.dratini_prompt()) {
             self.stop(reason);
             return;
         }
@@ -137,279 +106,87 @@ impl Helper {
             self.stop("Gender and Attack filters conflict");
             return;
         }
-        let Some(now) = snapshot(reader) else {
-            self.stop("Wait for both DIV trackers");
-            return;
-        };
-        let context = reader.dratini_context();
-        if self.context != Some(context) {
-            self.calibration = Calibration::default();
-            self.context = Some(context);
-        }
-        self.party_count = reader.party_count();
+        let now = snapshot(reader);
+        self.party_count = count;
         self.elapsed = 0;
-        self.trace = None;
-        self.previous = Some(now);
-        self.target = None;
-        self.armed = false;
+        self.last_advance = now.advance;
+        self.start_snapshot = Some(now);
+        self.last_sample = None;
         self.details = true;
-        if let Some(model) = self.calibration.model() {
-            self.search = Some(Search::new(now.rng, now.advance, model));
-            self.status = Status::Approaching;
-            self.note = "Searching (256 candidates/frame)";
-        } else {
-            self.search = None;
-            self.armed = true;
-            self.status = Status::Needed;
-            self.note = "Paused: release keys; press A once";
-            pnp::request_pause();
-        }
+        self.status = Status::Manual;
+        self.note = "Release keys; press A once to claim";
+        // Requests the existing host pause loop, without changing guest state.
+        // This is not a calibrated target or an exact input-time snapshot.
+        pnp::request_pause();
     }
-
     fn finish(&mut self, reader: &Gen2Reader) {
-        let Some(trace) = self.trace.take() else {
-            self.stop("Missing input capture");
+        let Some(start) = self.start_snapshot.take() else {
             return;
         };
-        if reader.party_count() != self.party_count + 1 {
-            self.stop("Unexpected party change");
-            return;
-        }
         let mon = reader.party(self.party_count);
         let dvs = Dvs((mon.atk << 4) | mon.def, (mon.spe << 4) | mon.spc);
         let (level, move4) = reader.party_level_move4(self.party_count);
-        if mon.spec_index != 147 || level != 15 {
-            self.stop("Newest Pokemon is not L15 Dratini");
-            return;
-        }
-        let sample = trace.before.and_then(|before| {
-            Some(Sample {
-                start: trace.start.rng,
-                delay: before.advance.checked_sub(trace.start.advance)?,
-                before: before.rng,
-                reads: trace.reads,
-                dvs,
-            })
+        self.last_sample = Some(Observation {
+            start,
+            end: snapshot(reader),
+            dvs,
         });
-        self.last_sample = sample;
-        let valid_trace = !trace.bad && trace.count == 4 && sample.map_or(false, |s| s.valid());
-        if let Some(target) = self.target {
-            let stable = valid_trace
-                && self
-                    .calibration
-                    .model()
-                    .map_or(false, |m| m.matches_sample(sample.unwrap()));
-            if !stable {
-                self.calibration = Calibration::default();
+        match verify(mon.spec_index, level, dvs, move4, self.filter) {
+            Verification::Success => {
+                self.status = Status::Success;
+                self.note = "Natural gift matches filters; move4 F5";
             }
-            let outcome = verify(mon.spec_index, level, dvs, move4, target.dvs, self.filter);
-            self.search = None;
-            self.previous = None;
-            match outcome {
-                Verification::Success => {
-                    self.status = Status::Success;
-                    self.note = if stable {
-                        "Natural Dratini verified: move4 F5"
-                    } else {
-                        "Target verified; timing needs calibration"
-                    };
-                }
-                Verification::MissingExtremeSpeed => {
-                    self.status = Status::Failed;
-                    self.note = if dvs.shiny() {
-                        "SHINY OK - EXTREMESPEED MISSING"
-                    } else {
-                        "DVS OK - EXTREMESPEED MISSING"
-                    };
-                }
-                Verification::Failed => {
-                    self.calibration = Calibration::default();
-                    self.stop("Prediction failed; recalibrate");
-                }
+            Verification::MissingExtremeSpeed => {
+                self.status = Status::Failed;
+                self.note = if dvs.shiny() {
+                    "SHINY OK - EXTREMESPEED MISSING"
+                } else {
+                    "DVS OK - EXTREMESPEED MISSING"
+                };
             }
-        } else {
-            if !valid_trace {
-                self.calibration = Calibration::default();
-                self.stop("Unmodelled RNG path; manual control");
-                return;
-            }
-            let accepted = self.calibration.add(sample.unwrap());
-            self.status = Status::Needed;
-            self.previous = None;
-            self.note = if accepted {
-                "Sample read. Reset normally; repeat."
-            } else {
-                "Unstable/duplicate sample; retry."
-            };
+            Verification::Failed => self.stop("Gift identity or DV filters mismatch"),
+        }
+    }
+}
+pub fn cancel() {
+    if english() {
+        let h = unsafe { helper() };
+        if h.start_snapshot.is_some() {
+            h.stop("Cancelled; manual control");
         }
     }
 }
 
-/// Called from the existing emulator read observer. Only plugin-owned copies change.
-/// PC is the immediate-byte address of each Random ldh a,[rDIV].
-pub fn observe_random(pc: u16, reader: &Gen2Reader) {
-    if !english() || ![0x2f8e, 0x2f96].contains(&pc) {
-        return;
-    }
-    let h = unsafe { helper() };
-    let Some(trace) = h.trace.as_mut() else {
-        return;
-    };
-    let expected_pc = if trace.count & 1 == 0 { 0x2f8e } else { 0x2f96 };
-    if trace.count >= 4 || pc != expected_pc {
-        trace.bad = true;
-        return;
-    }
-    if trace.count == 0 {
-        trace.before = snapshot(reader);
-    }
-    if trace.before.map_or(true, |s| s.advance != hook::rng_advance()) {
-        trace.bad = true;
-    }
-    trace.reads[trace.count] = reader.div();
-    trace.count += 1;
-}
-
-/// Existing pause loop reports a real physical input before resuming emulation.
-/// This callback neither consumes nor synthesizes input.
-#[no_mangle]
-pub extern "C" fn crystal_timing_resume(keys: u32) {
-    if !english() {
-        return;
-    }
-    let h = unsafe { helper() };
-    if !h.armed && h.status != Status::Ready {
-        return;
-    }
-    if keys != Button::A as u32 || pnp::is_pressing(!(Button::A as u32)) {
-        h.stop("Use A alone from pause; re-arm");
-        return;
-    }
-    let reader = Gen2Reader::crystal();
-    if !reader.dratini_prompt()
-        || reader.dratini_received()
-        || reader.party_count() != h.party_count
-        || h.context != Some(reader.dratini_context())
-    {
-        h.stop("Gift setup changed; manual control");
-        return;
-    }
-    let Some(now) = snapshot(&reader) else {
-        h.stop("DIV trackers lost; re-arm");
-        return;
-    };
-    if h.target
-        .map_or(false, |t| t.advance != now.advance || t.rng != now.rng)
-    {
-        h.stop("Pause boundary missed; re-arm");
-        return;
-    }
-    h.armed = false;
-    h.elapsed = 0;
-    h.trace = Some(Trace {
-        start: now,
-        before: None,
-        reads: [0; 4],
-        count: 0,
-        bad: false,
-    });
-    h.status = if h.target.is_some() {
-        Status::Verifying
-    } else {
-        Status::Calibrating
-    };
-    h.note = "Claim normally; finish nickname prompt";
-}
-
-pub fn cancel() {
-    if !english() {
-        return;
-    }
-    let h = unsafe { helper() };
-    if h.armed || h.search.is_some() || h.trace.is_some() {
-        h.stop("Cancelled; manual control");
-    }
-}
-
-/// Runs even when the overlay is hidden, so a completed gift cannot leave stale work.
+/// Ordinary overlay update only. No exact claim marker or generation offset is
+/// inferred: this interval also includes input latency, text and nickname time.
 pub fn tick(reader: &Gen2Reader) {
     if !english() {
         return;
     }
     let h = unsafe { helper() };
-    if h.trace.is_some() {
-        h.elapsed = h.elapsed.saturating_add(1);
-        if !reader.in_dragon_shrine() || h.elapsed > 7200 {
-            h.stop("Claim interrupted or timed out");
-            return;
-        }
-        if reader.party_count() < h.party_count || reader.party_count() > h.party_count + 1 {
-            h.stop("Unexpected party change");
-            return;
-        }
-        if reader.party_count() == h.party_count + 1 {
-            h.status = Status::Verifying;
-        }
-        // EVENT_GOT_DRATINI is set AFTER GivePoke, nickname and GiveDratini.
-        if reader.dratini_received() {
-            h.finish(reader);
-        }
+    if h.start_snapshot.is_none() {
         return;
     }
-    if h.search.is_none() {
-        return;
-    }
-    if !reader.dratini_prompt() || reader.dratini_received() || reader.party_count() != h.party_count {
-        h.stop("Left gift timing point");
-        return;
-    }
-    let Some(now) = snapshot(reader) else {
-        h.stop("DIV tracker lost; manual control");
-        return;
-    };
-    if let Some(previous) = h.previous {
-        let Some(distance) = now.advance.checked_sub(previous.advance) else {
-            h.stop("RNG reset; re-arm");
-            return;
-        };
-        if distance > 8 {
-            h.stop("Unexpected advance gap");
-            return;
-        }
-        let mut expected = previous.rng;
-        expected.advance(distance);
-        if expected != now.rng {
-            h.stop("Idle RNG diverged; re-arm");
-            return;
-        }
-    }
-    h.previous = Some(now);
-    if h.target.is_none() {
-        let search = h.search.as_mut().unwrap();
-        h.target = search.chunk(h.filter, now.advance.saturating_add(1));
-        if h.target.is_some() {
-            h.status = Status::Found;
-            h.note = "Empirical target; checking live RNG";
-        } else if search.exhausted() {
-            h.stop("No match in 1,000,000 advances");
-        }
-        return;
-    }
-    let target = h.target.unwrap();
-    match now.advance.cmp(&target.advance) {
-        core::cmp::Ordering::Greater => h.stop("Target passed; manual control"),
-        core::cmp::Ordering::Equal => {
-            if now.rng != target.rng {
-                h.stop("Target state mismatch");
-                return;
+    h.elapsed = h.elapsed.saturating_add(1);
+    let advance = hook::rng_advance();
+    let count = reader.party_count();
+    let received = reader.dratini_received();
+    match claim_progress(
+        h.party_count,
+        count,
+        received,
+        reader.in_dragon_shrine(),
+        h.elapsed,
+        advance >= h.last_advance,
+    ) {
+        ClaimProgress::Failed => h.stop("Claim interrupted, reset or timed out"),
+        ClaimProgress::Complete => h.finish(reader),
+        ClaimProgress::Waiting => {
+            h.last_advance = advance;
+            if count == h.party_count + 1 {
+                h.status = Status::Verifying;
+                h.note = "Finish nickname and gift text normally";
             }
-            h.status = Status::Ready;
-            h.note = "Pause requested. Press A once.";
-            pnp::request_pause();
-        }
-        core::cmp::Ordering::Less => {
-            h.status = Status::Approaching;
-            h.note = "L+R pause / L step / R resume";
         }
     }
 }
@@ -464,7 +241,7 @@ pub fn draw(reader: &Gen2Reader, locked: bool) {
                     4 => h.start(reader),
                     _ => {
                         h.stop("Cancelled; manual control");
-                        h.calibration = Calibration::default();
+                        h.last_sample = None;
                     }
                 }
             }
@@ -496,52 +273,48 @@ pub fn draw(reader: &Gen2Reader, locked: bool) {
                 "Collector: Atk 15"
             ][h.preset as usize]
         );
-        pnp::println!("{} Start / calibrate", cursor(4));
-        pnp::println!("{} Clear calibration / cancel", cursor(5));
+        pnp::println!("{} Start manual claim", cursor(4));
+        pnp::println!("{} Clear observation / cancel", cursor(5));
         pnp::println!("Up/Down select; X change; Y live");
         pnp::println!("Stop at elder's final text:");
         pnp::println!("have recognized your worth.");
-        pnp::println!("Five distinct manual claims needed.");
-        pnp::println!("Reset normally without saving claims.");
+        pnp::println!("Manual only; no predicted target.");
+        pnp::println!("Reset normally to retry a claim.");
         pnp::println!("L+R pause; L step; R resume");
     } else {
         let div = hook::measured_div();
         pnp::println!("RNG {:04X}  Advances {}", reader.rng_state(), hook::rng_advance());
         pnp::println!("ADIV {:?} / {:02X}", hook::add_div_tracker().index(), div >> 8);
         pnp::println!("SDIV {:?} / {:02X}", hook::sub_div_tracker().index(), div as u8);
-        if let Some(target) = h.target {
-            pnp::println!(
-                "Nearest {}  Distance {}",
-                target.advance,
-                target.advance.saturating_sub(hook::rng_advance())
-            );
-            pnp::println!(
-                "Pred Atk/Def/Spe/Spc {}/{}/{}/{}",
-                target.dvs.0 >> 4,
-                target.dvs.0 & 15,
-                target.dvs.1 >> 4,
-                target.dvs.1 & 15
-            );
-            pnp::println!(
-                "Pred shiny {} / {}",
-                target.dvs.shiny(),
-                target.dvs.gender().name()
-            );
-        } else {
-            pnp::println!("Nearest / distance / predicted: --");
-        }
-        pnp::println!("Calibration {}/5", h.calibration.samples);
-        if let Some(model) = h.calibration.model() {
-            pnp::println!("Validated delay {} VBlanks", model.delay);
+        pnp::println!("Nearest / distance / predicted: --");
+        pnp::println!("Exact gift calibration unavailable");
+        if let Some(start) = h.start_snapshot {
+            pnp::println!("Armed RNG {:04X} adv {}", start.state, start.advance);
         }
         if let Some(sample) = h.last_sample {
             pnp::println!(
-                "Last capture RNG {:04X} delay {}",
+                "Last start {:04X} adv {}",
                 sample.start.state,
-                sample.delay
+                sample.start.advance
             );
-            pnp::println!("Last DVs {:02X} {:02X}", sample.dvs.0, sample.dvs.1);
-            pnp::println!("DIV reads {:02X?}", sample.reads);
+            pnp::println!("Last end {:04X} adv {}", sample.end.state, sample.end.advance);
+            pnp::println!(
+                "Start A{:?}/{:02X} S{:?}/{:02X}",
+                sample.start.adiv.0,
+                sample.start.adiv.1,
+                sample.start.sdiv.0,
+                sample.start.sdiv.1
+            );
+            pnp::println!(
+                "Observed span {} (not gift offset)",
+                sample.end.advance.saturating_sub(sample.start.advance)
+            );
+            pnp::println!("Actual DVs {:02X} {:02X}", sample.dvs.0, sample.dvs.1);
+            pnp::println!(
+                "Actual shiny {} / {}",
+                sample.dvs.shiny(),
+                sample.dvs.gender().name()
+            );
         }
         pnp::println!("Y options / X cancel");
     }

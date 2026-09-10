@@ -118,9 +118,6 @@ fn gb_read_mem(regs: &[u32], _stack_pointer: *mut u32) {
         unsafe { SDIV = div };
         unsafe { SUB_DIV_TRACKER.update(div) };
     }
-
-    // Reuse this observational call site; no additional ARM or GB patch is installed.
-    super::dratini::observe_random(pc, &reader);
 }
 
 pub fn init_crystal() {

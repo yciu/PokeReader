@@ -1,53 +1,49 @@
 # ExtremeSpeed Dratini RNG (English Crystal VC)
 
-This is a read-only, empirically calibrated timing assistant for title
-`0004000000172800`, version 0. It cannot manufacture a shiny or change the quiz.
-Other languages retain their existing menus. No Dratini timing offset is shipped.
+This is a **manual timing and read-only receipt assistant**, for title
+`0004000000172800`, version 0. Deterministic prediction, nearest-target search,
+exact claim capture and automatic calibration are unavailable. The existing
+VBlank RNG/DIV tracker does not supply enough information to establish the gift's
+four generation-time DIV reads. No timing offset is assumed.
 
 ## Workflow
 
-1. Save normally before claiming the gift, with 1–5 party Pokémon. Answering the
-   Dragon Master's quiz without a wrong answer is necessary for ExtremeSpeed.
-2. Talk to the elder on the later visit. Stop at the final page ending
-   **“have recognized your worth.”** Do not dismiss it yet. The helper checks the
-   English script bank/position, map, party capacity and `EVENT_GOT_DRATINI`.
-3. Open **Dratini RNG**. Defaults are Shiny ON, Gender Any, Attack Any shiny-valid.
-   Up/Down selects a row; X changes it. Y switches between options and live data.
-   Presets cycle through Fast, Male shiny, Female shiny and Collector (Atk 15).
-   With Shiny OFF, Defense/Speed/Special are unrestricted; Attack Any still means
-   the eight shiny-valid Attack DVs. Female Dratini has Attack 0–7; male has 8–15.
-4. Select **Start / calibrate**, press X, and release all buttons. The existing
-   pause loop is requested. Press physical **A once**, on its own, to resume and
-   claim. Capture occurs inside that pause loop immediately before resumption,
-   not when X was pressed. Finish the nickname prompt normally. The helper waits
-   for the shrine's received-event flag, which is set after the moveset routine.
-5. Reset using normal game controls without saving that claim, return to the same
-   setup and repeat at different RNG states. Three distinct claims must identify
-   one model; two additional distinct claims must validate it. Plugin calibration
-   lives only in RAM; restarting the title/plugin loses it. Changes to options,
-   party contents, trainer ID, quiz state or Dratini's Pokédex state invalidate it.
-   Do not change the setup between samples. “Unmodelled RNG path” means this
-   setup cannot currently be predicted; retain manual control rather than guessing.
-6. After five accepted samples, reset normally again and use Start at the same
-   prompt. Search examines at most 256 candidates per overlay frame, up to one
-   million advances. It selects the first still-future matching candidate.
-   RNG/DIV continuity is checked while approaching. L+R pauses, L frame-steps,
-   and R resumes using PokeReader's existing controls.
-7. At READY the helper requests pause. Release other buttons, then press **A
-   once**. The actual pause-release snapshot must equal the target, or the helper
-   reports failure/manual control. It never suppresses your physical input;
-   a mistimed A can still naturally claim a non-target Dratini.
-8. Complete the nickname prompt. SUCCESS requires newest party member Dratini,
-   level 15, exactly the targeted DVs, requested filters, and move 4 `F5`.
-   Correct shiny DVs without ExtremeSpeed show
-   **SHINY OK - EXTREMESPEED MISSING** and the quiz explanation. Moves are never
-   repaired. X on the live page cancels; leaving/hiding the helper cancels active
-   work. A cancellation does not unpause the game automatically.
-
-The search model is empirical, not a proof that every VC execution has the same
-latency. No real 3DS calibration or hardware end-to-end success is claimed by the
-unit tests. If the bounded model cannot fit the observations, this feature remains
-a calibration/timing assistant. It has no write-based fallback.
+1. Save normally before the gift with 1–5 party Pokémon. The Dragon Master's
+   quiz must have no wrong answers for the game to award ExtremeSpeed.
+2. On the later visit, stop at the elder's final page ending
+   **“have recognized your worth.”** Leave it open. The helper reads the English
+   script bank/position, map, party count and `EVENT_GOT_DRATINI` to check eligibility.
+3. Open **Dratini RNG**. Defaults: Shiny ON, Gender Any, Attack Any shiny-valid.
+   Up/Down selects a row; X changes it; Y switches to live observations.
+   Presets: Fast (any shiny), Male shiny, Female shiny, Collector (Atk 15).
+   These are receipt filters, not promises of faster or guaranteed shiny generation.
+   Shiny OFF frees Defense/Speed/Special; Attack Any still means the eight
+   shiny-valid Attack DVs. Female Dratini has Attack 0–7; male has 8–15.
+4. Select **Start manual claim** with X and release the buttons. The helper
+   records an ordinary overlay-frame observation and requests the existing pause
+   loop. It displays MANUAL TIMING, never READY or a predicted target.
+   Press physical **A once** to resume and dismiss the pending text. Input is
+   neither generated nor consumed by this feature. The observation precedes the
+   actual pause boundary and is not an exact snapshot at A or at generation.
+   Existing L+R pause, L frame-step and R resume controls remain available for
+   manual timing. Additional normal text/nickname input may be required.
+5. Finish the gift and nickname prompts normally. Verification waits for exactly
+   one new party member and the received-event flag, set after the game's moveset
+   routine. SUCCESS requires Dratini, level 15, selected DV/shiny/gender filters,
+   and move 4 `F5`. It does not certify a predicted DV target or timing model.
+   A matching shiny without move 4 F5 displays
+   **SHINY OK - EXTREMESPEED MISSING** and explains the quiz condition.
+6. Live data shows current RNG, existing ADIV/SDIV indices and values, advances,
+   the last start/end observations and actual DVs/shiny/gender. The observed span
+   includes waiting, text, nickname time and polling latency; it is **not a gift
+   offset**. Only the last observation is retained in plugin RAM. No amount of
+   manual observations unlocks prediction. Reset normally to retry, without saving
+   a claim you wish to discard; the plugin cannot reset or restore the game.
+7. X on the live page cancels. Leaving/hiding the helper cancels pending work.
+   Invalid party changes, leaving the shrine, an observed counter reset, or over
+   7200 overlay updates without completion stop verification. These checks cannot
+   detect every reset or external state change; cancel before changing the setup.
+   Cancellation does not automatically resume the existing pause loop.
 
 ## Source inspection and actual RNG relationship
 
@@ -55,7 +51,7 @@ Sources inspected, pinned for reproducibility:
 
 - [PokemonRNGGuides Gameboy RNG and DIV](https://github.com/zaksabeast/PokemonRNGGuides/tree/6a18c90bc47d5c24bd48fb6c4513f92ae6d64aa8/rng_tools/src/rng/gameboy),
   and its [starter predictor](https://github.com/zaksabeast/PokemonRNGGuides/blob/6a18c90bc47d5c24bd48fb6c4513f92ae6d64aa8/rng_tools/src/generators/gen2/starter.rs).
-  The DIV increment schedule and reference sequence are credited to this GPL-3.0
+  The original DIV tracker is based on this GPL-3.0
   project. Its starter predictor has encounter-specific transforms and a TODO;
   none of its starter offsets or uncertainty combinations are reused here.
 - pokecrystal at `7a7881d0d62e0ddbd82dcf10e7116807487ac651`:
@@ -92,74 +88,83 @@ two ordinary VBlank advances. Input latency, text/sound work, interrupt placemen
 divider phase and emulated cycles separate A from these four reads. Current
 overlay RNG/DIV snapshots alone do not statically determine all of those phases.
 
-Calibration observes the first two Random calls after A through the existing read
-observer. It rejects extra/misordered calls and any VBlank between those four
-reads. It records the count of ordinary VBlanks preceding the first call (max
-512), the pre-call RNG/DIV snapshot, and all four observed DIV bytes. The idle
-forecast must exactly reproduce that pre-call snapshot; the above Random
-arithmetic must then reproduce both real party DV bytes.
-
-Each observed DIV byte is independently fitted to `slope * baseline + offset
-(mod 256)` with slope in `{0,1,2}`. Baseline is the corresponding last normal
-VBlank DIV, not a starter forecast. Both the constant offset and slope are inferred
-from observed reads. This is a deliberately limited hypothesis family, not a
-claim about universal hardware behavior. Conflicting observations clear the model;
-ambiguity does not unlock search. At least three distinct captures are needed for
-identification, followed by two distinct held-out captures. Search rolls both an
-input-state cursor and a delayed cursor, so it does not replay hundreds of frames
-or allocate a vector for every candidate. Receipt also checks the learned model
-against the new observed trace and invalidates it on disagreement.
+The earlier affine calibration/search implementation depended on additional
+Random-hook observations. It has been removed, including its duplicate local
+RNG/DIV simulator. Inferring a unique safe generation offset from only the frame
+observation and resulting two DV bytes is not established. Manual observations
+therefore never become a calibrated model.
 
 After GivePoke and nickname handling return, the game itself uses the quiz result
 in `GiveDratini` to assign Wrap/Thunder Wave/Twister/ExtremeSpeed, then sets
-`EVENT_GOT_DRATINI`. The verifier waits for this flag and a party count increase
-of exactly one. It never mistakes the early, partially initialized party slot or
-the normal moveset before `GiveDratini` for the final gift.
+`EVENT_GOT_DRATINI`. All receipt checks occur afterward in the overlay update.
 
-## Read-only and hook audit
+## Strict legitimacy audit
 
-No new runtime patch or hook is installed. The already-present Crystal setup
-hooks two ARM BL call sites in the VC emulator:
+The audit compares the whole feature branch with main at
+`155de39c4b69de89a0f81381c60861bc21d10364`, including the actual call paths, not just
+symbol searches. The fix also removes both the RNG observer and pause-resume
+callback from the previous implementation.
 
-| Existing hook | Observation | Feature change |
+**No Dratini code is reachable from either Crystal RNG instrumentation hook.**
+`reader_core/src/crystal/hook.rs` and `3gx/includes/pokereader.h` are restored to
+main's contents. There is no `observe_random` or `crystal_timing_resume` symbol.
+Dratini state is owned only by the existing single-threaded overlay frame path.
+Snapshot construction, UI, eligibility and verification run there. No Dratini
+observer, guest call, DIV measurement, input callback or generation hook remains.
+The snapshot copies DIV indices/values from the existing plugin tracker; it never
+calls `reader.div()`. RNG and party reads use existing reader methods from the
+overlay, not from a timing-sensitive intercepted RNG path.
+
+Existing instrumentation (unchanged from main):
+
+| Existing ARM hook | Existing behavior | Dratini change |
 |---|---|---|
-| `001A8360` | Copies `r0` to a plugin cycle accumulator | None |
-| `001AF17C` | Observes GB DIV reads, PC and DIV trackers | For Random's two PCs, additionally copies four DIV bytes and a pre-call snapshot while a manual claim is armed |
+| `001A8360` | Copies r0 into plugin cycle accumulator | None |
+| `001AF17C` | Observes normal VBlank DIV reads at PCs 02B6/02BE and updates plugin trackers | None |
 
-`utils/hook_game_branch.rs` and the existing ARM trampoline save `r0-r12` and
-the return address, dispatch the observer, then restore registers and execute the
-original BL destination with its original inputs. The added observer receives no
-mutable register/stack slice. It calls no memory-write helper and assigns only
-plugin-owned fields. It does not replace a DIV read or a Random return value.
-All added game accesses are reads of ordinary HRAM/WRAM through the existing
-`Gen2Reader`/`gb_mem` reader, or reads of the existing emulator DIV pointer.
-The emulator cycle accumulator hook, original destinations and trampoline are
-unchanged. ARM condition flags are call-clobbered under the existing C ABI; the
-observer does not write emulated Game Boy flags.
+The existing branch-hook installer writes ARM BL instructions, and the existing
+C framebuffer/HID integration also contains runtime instrumentation. Those paths
+are unchanged; this feature adds no runtime patch. Register preservation alone
+is not a proof of the closed-source VC emulator's timing noninterference. No
+universal proof or real-device timing equivalence is claimed for the legacy
+instrumentation or overlay reads. The established boundary is narrower: this
+feature adds no execution to the intercepted RNG paths and makes no guest-data
+writes or RNG/DIV changes.
 
-This establishes source-level noninterference with RNG values and Pokémon data:
-no added assignment targets guest memory, emulated CPU state, function inputs or
-return values; original operations still run. Observation costs host CPU time.
-The repository does not contain the closed-source VC emulator, so a universal
-proof of its wall-clock scheduling or behavior on every console is unavailable.
-The helper consequently makes no unconditional deterministic-timing promise and
-rejects observed drift. A real-device timing comparison is still needed to certify
-that scheduling on a particular console; failed calibration must remain manual.
+Per-file review of the final branch changes:
 
-The only new host control API, `host_request_pause`, assigns the pre-existing
-plugin `is_paused` boolean. The existing pause loop calls `crystal_timing_resume`
-when a physical resume/step button is detected, before it resumes execution.
-It does not change HID shared memory, inject a button, swallow an input or invoke
-any Pokémon-generating routine. No new feature call reaches `pnp::write`,
-`host_write_mem`, save/event writes, RNG reseeding, or any Pokémon edit API.
+| File | Change and write assessment |
+|---|---|
+| `3gx/includes/pnp.h` | Declares the host pause request; no game access. |
+| `3gx/sources/main.c` | Adds only `host_request_pause`, assigning existing plugin `is_paused`; permitted execution control, no guest write or input injection. Resume/step paths restored to main. |
+| `README.md` | Documents manual scope and limitations; no runtime effect. |
+| `docs/extremespeed-dratini.md` | Workflow, research and this audit; no runtime effect. |
+| `reader_core/src/crystal/dratini.rs` | Overlay-only observations, manual pause request, filters and receipt checks. Assignments affect plugin state; game accesses are reads. No observer, generation-time capture or predictor. |
+| `reader_core/src/crystal/dratini_rng.rs` | Pure filtering and receipt/progress validation on copied arguments, with tests. No game access, allocation, RNG simulation or calibration/search logic. |
+| `reader_core/src/crystal/frame.rs` | English menu and overlay tick/draw/cancel dispatch. Reuses existing tracker; no new game writes. Existing reset resets a plugin counter only. |
+| `reader_core/src/crystal/mod.rs` | Registers two Rust modules; no game access. |
+| `reader_core/src/crystal/reader.rs` | Read-only party count, received flag, shrine/prompt and level/move accessors. Obsolete setup fingerprint removed. No quiz access added. |
+| `reader_core/src/pnp/bindings.rs` | Pause declaration/test stub and existing test-stub cfg adjustments. No new write binding. Existing write stubs remain unchanged in effect. |
+| `reader_core/src/pnp/input.rs` | Wraps the host pause request only; no controller injection or game write. |
+| `reader_core/src/crystal/hook.rs` | No remaining difference from main. Dratini observer call removed. |
+| `3gx/includes/pokereader.h` | No remaining difference from main. Pause callback declaration removed. |
+
+No added path calls `pnp::write`, `write_mem`, `host_write_mem` or an equivalent
+write API. No Pokémon, WRAM/SRAM, party, DV/species/move/PP, save, RNG/seed, DIV,
+hRandomAdd/hRandomSub, event, script or quiz assignments exist in the feature.
+Game-state observations use the existing read APIs. The only new host control
+call requests an allowed pause. Physical controller input remains unchanged.
+
+PASS — no Dratini-specific nested emulator/game calls in timing-sensitive hooks, no game-data writes, no RNG/DIV modification.
 
 ## Validation
 
-Unit tests exhaust all 65,536 DV combinations for shininess, check all gender
-thresholds and Attack filters, presets, carry/borrow/wrap arithmetic, the external
-idle-RNG reference sequence, DIV exceptions, calibration ambiguity/duplicates/
-holdouts/inconsistent paths, chunked nearest-target selection and receipt checks.
-Host tests automatically use the existing test stubs; the 3DS release does not.
-The fork's CI runs `make lint`, `make test`, and `make` and uploads
-`out/default.3gx`. The artifact must still be calibrated on the user's real English
-Crystal VC setup before claiming that its timing is reliable there.
+Unit tests exhaust all 65,536 DV combinations for shininess, check gender and
+Attack filters/presets, conflicts and eligibility, and validate receipt identity,
+level, filters and move 4. Progress tests cover partial party initialization,
+completion only after the received flag, unexpected party changes, shrine exit,
+counter reset and timeout. There are no predictor/calibration tests because those
+capabilities have been removed, rather than retained behind an unproven model.
+Host tests use test stubs; the 3DS release does not. The fork's CI runs `make lint`,
+`make test` and `make`, uploading `out/default.3gx`. These checks do not establish
+real-console timing accuracy; the feature remains a manual assistant.

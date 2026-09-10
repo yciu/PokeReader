@@ -56,18 +56,6 @@ impl Gen2Reader {
         (gb_mem::read_u8(addr + 0x1f), gb_mem::read_u8(addr + 5))
     }
 
-    pub fn dratini_context(&self) -> u64 {
-        // Identity of the setup, not a save copy. No filesystem or game writes.
-        let mut hash = 0xcbf29ce484222325u64;
-        for addr in [0xcfcc, 0xda8a, 0xdeab, 0xdecb, 0xd47b, 0xd47c, 0xdcd7] {
-            hash = (hash ^ u64::from(gb_mem::read_u8(addr))).wrapping_mul(0x100000001b3);
-        }
-        for offset in 0..u32::from(self.party_count().min(6)) * 0x30 {
-            hash = (hash ^ u64::from(gb_mem::read_u8(0xdcdf + offset))).wrapping_mul(0x100000001b3);
-        }
-        hash
-    }
-
     pub fn crystal() -> Self {
         Self {
             addrs: &CRYSTAL_ADDRESSES,

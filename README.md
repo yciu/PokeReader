@@ -22,10 +22,12 @@ This information can be used to RNG shiny and high IV Pokemon, similar to lua sc
 
 ## Crystal: ExtremeSpeed Dratini RNG
 
-English Crystal VC includes **Dratini RNG**, a read-only timing assistant for the
-Dragon Shrine level-15 gift. It requires five distinct calibration claims before
-search is enabled, uses physical A input, and verifies the naturally generated
-Dratini and its ExtremeSpeed move. See the [workflow and RNG/hook audit](docs/extremespeed-dratini.md).
+English Crystal VC includes **Dratini RNG**, a manual timing and read-only receipt
+assistant for the Dragon Shrine level-15 gift. It reuses the existing pause/step
+controls and RNG/DIV display, accepts physical input, and checks the naturally
+generated Dratini against your filters and move 4 ExtremeSpeed. Deterministic
+prediction and exact gift calibration are unavailable; no Dratini observer runs
+in the RNG hooks. See the [workflow and legitimacy audit](docs/extremespeed-dratini.md).
 
 ## Installing
 

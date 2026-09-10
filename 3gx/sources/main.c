@@ -39,13 +39,11 @@ void handle_freeze(bool isTopScreen)
 
         if (just_pressed & (KEY_SELECT | KEY_L))
         {
-            crystal_timing_resume(just_pressed);
             break;
         }
 
         if (just_pressed & (KEY_A | KEY_START | KEY_R))
         {
-            crystal_timing_resume(just_pressed);
             is_paused = false;
             break;
         }
