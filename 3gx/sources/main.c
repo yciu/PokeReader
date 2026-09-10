@@ -16,6 +16,12 @@ static Handle memLayoutChanged;
 static u8 stack[0x1000] __attribute__((aligned(8)));
 static bool is_paused = false;
 
+// Plugin state only. No guest/emulator RAM or controller-memory writes.
+void host_request_pause(void)
+{
+    is_paused = true;
+}
+
 void handle_freeze(bool isTopScreen)
 {
     u64 masked_title_id = get_title_id() & 0xfff000;

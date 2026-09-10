@@ -1,3 +1,5 @@
+mod dratini;
+mod dratini_rng;
 mod draw;
 mod frame;
 mod game_lib;

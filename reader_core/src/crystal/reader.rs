@@ -29,6 +29,33 @@ pub struct Gen2Reader {
 }
 
 impl Gen2Reader {
+    // English Crystal symbols; these accessors are used only after the CrystalEn gate.
+    pub fn party_count(&self) -> u8 {
+        gb_mem::read_u8(0xdcd7)
+    }
+
+    pub fn dratini_received(&self) -> bool {
+        gb_mem::read_u8(0xda89) & 0x20 != 0
+    }
+
+    pub fn in_dragon_shrine(&self) -> bool {
+        gb_mem::read_u8(0xdcb5) == 3 && gb_mem::read_u8(0xdcb6) == 82 && gb_mem::read_u8(0xd22d) == 0
+    }
+
+    pub fn dratini_prompt(&self) -> bool {
+        // .GiveDratini: writetext (3 bytes), waitbutton (1 byte). ScriptPos is LE.
+        self.in_dragon_shrine()
+            && gb_mem::read_u8(0xd439) == 0x63
+            && gb_mem::read_u8(0xd43a) == 0xc9
+            && gb_mem::read_u8(0xd43b) == 0x51
+            && gb_mem::read_u8(0xff9e) == 0
+    }
+
+    pub fn party_level_move4(&self, slot: u8) -> (u8, u8) {
+        let addr = 0xdcdf + u32::from(slot) * 0x30;
+        (gb_mem::read_u8(addr + 0x1f), gb_mem::read_u8(addr + 5))
+    }
+
     pub fn crystal() -> Self {
         Self {
             addrs: &CRYSTAL_ADDRESSES,

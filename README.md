@@ -20,6 +20,17 @@ This information can be used to RNG shiny and high IV Pokemon, similar to lua sc
     - X + Right (D-Pad): Set SOS Caller slot to current Ally slot
     - X + Up/Down: Manually increment/decrement Caller slot
 
+## Crystal: ExtremeSpeed Dratini RNG
+
+English Crystal VC includes **Dratini RNG**, a safe calibration evidence and
+read-only receipt assistant for the Dragon Shrine level-15 gift. Explicit capture
+copies already-observed RNG/DIV state; a bounded log correlates natural Dratini
+DVs and detects inconsistent repeated outcomes. It reuses existing pause/step
+controls and physical input, and verifies receipt filters plus move 4 ExtremeSpeed.
+Prediction remains disabled: these observations do not establish the missing
+claim-to-generation timing. No Dratini work runs in RNG hooks. See the
+[workflow, prediction gate and legitimacy audit](docs/extremespeed-dratini.md).
+
 ## Installing
 
 1. Update to the latest [Luma](https://github.com/LumaTeam/Luma3DS/releases) or set up [Citra](https://github.com/citra-emu/citra).
