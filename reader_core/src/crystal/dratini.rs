@@ -396,19 +396,21 @@ pub fn tick(reader: &Gen2Reader) {
         return;
     }
     let target = h.target.unwrap();
-    if now.advance > target.advance {
-        h.stop("Target passed; manual control");
-    } else if now.advance == target.advance {
-        if now.rng != target.rng {
-            h.stop("Target state mismatch");
-            return;
+    match now.advance.cmp(&target.advance) {
+        core::cmp::Ordering::Greater => h.stop("Target passed; manual control"),
+        core::cmp::Ordering::Equal => {
+            if now.rng != target.rng {
+                h.stop("Target state mismatch");
+                return;
+            }
+            h.status = Status::Ready;
+            h.note = "Pause requested. Press A once.";
+            pnp::request_pause();
         }
-        h.status = Status::Ready;
-        h.note = "Pause requested. Press A once.";
-        pnp::request_pause();
-    } else {
-        h.status = Status::Approaching;
-        h.note = "L+R pause / L step / R resume";
+        core::cmp::Ordering::Less => {
+            h.status = Status::Approaching;
+            h.note = "L+R pause / L step / R resume";
+        }
     }
 }
 
@@ -419,7 +421,7 @@ pub fn draw(reader: &Gen2Reader, locked: bool) {
     }
     pnp::set_print_max_len(40);
     let h = unsafe { helper() };
-    if !locked && !(pnp::is_pressing(Button::X) && pnp::is_pressing(Button::Y)) {
+    if !(locked || pnp::is_pressing(Button::X) && pnp::is_pressing(Button::Y)) {
         if pnp::is_just_pressed(Button::Y) {
             h.details = !h.details;
         }
