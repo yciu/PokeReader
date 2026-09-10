@@ -125,16 +125,16 @@ impl Helper {
         self.previous = None;
     }
     fn start(&mut self, reader: &Gen2Reader) {
-        if !(1..6).contains(&reader.party_count()) {
-            self.stop("Need 1-5 party Pokemon");
+        if let Err(reason) = preflight(
+            reader.party_count(),
+            reader.dratini_received(),
+            reader.dratini_prompt(),
+        ) {
+            self.stop(reason);
             return;
         }
-        if reader.dratini_received() {
-            self.stop("Dratini gift already received");
-            return;
-        }
-        if !reader.dratini_prompt() {
-            self.stop("Stop at: have recognized your worth.");
+        if !self.filter.possible() {
+            self.stop("Gender and Attack filters conflict");
             return;
         }
         let Some(now) = snapshot(reader) else {

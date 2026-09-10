@@ -54,6 +54,12 @@ impl Default for Filter {
 }
 
 impl Filter {
+    pub fn possible(self) -> bool {
+        SHINY_ATTACKS
+            .iter()
+            .any(|atk| self.matches(Dvs((atk << 4) | 10, 0xaa)))
+    }
+
     pub fn matches(self, dvs: Dvs) -> bool {
         (!self.shiny || dvs.shiny())
             && (self.gender == Gender::Any || self.gender == dvs.gender())
@@ -350,6 +356,22 @@ pub enum Verification {
     MissingExtremeSpeed,
     Failed,
 }
+
+pub fn preflight(count: u8, received: bool, prompt: bool) -> Result<(), &'static str> {
+    if received {
+        return Err("Dratini gift already received");
+    }
+    if count == 6 {
+        return Err("Party full: gift cannot be claimed");
+    }
+    if !(1..6).contains(&count) {
+        return Err("Invalid party count; manual control");
+    }
+    if !prompt {
+        return Err("Stop at: have recognized your worth.");
+    }
+    Ok(())
+}
 pub fn verify(species: u8, level: u8, dvs: Dvs, move4: u8, target: Dvs, filter: Filter) -> Verification {
     if species != 147 || level != 15 || dvs != target || !filter.matches(dvs) {
         return Verification::Failed;
@@ -601,5 +623,35 @@ mod tests {
             verify(147, 15, Dvs(0, 0), 0xf5, Dvs(0, 0), Filter::default()),
             Verification::Failed
         );
+    }
+
+    #[test]
+    fn eligibility_and_impossible_filters() {
+        for count in 0..=7 {
+            assert_eq!(preflight(count, false, true).is_ok(), (1..6).contains(&count));
+            assert!(preflight(count, true, true).is_err());
+            assert!(preflight(count, false, false).is_err());
+        }
+        assert!(Filter::default().possible());
+        assert!(!Filter {
+            gender: Gender::Female,
+            ..Filter::preset(3)
+        }
+        .possible());
+        assert!(!Filter {
+            shiny: false,
+            ..Filter::default()
+        }
+        .matches(Dvs(0x40, 0)));
+        assert!(Filter {
+            shiny: false,
+            ..Filter::default()
+        }
+        .matches(Dvs(0x20, 0)));
+        let s = sample(9);
+        assert!(model().matches_sample(s));
+        let mut wrong = model();
+        wrong.reads[0].offset += 1;
+        assert!(!wrong.matches_sample(s));
     }
 }
