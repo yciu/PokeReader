@@ -17,6 +17,7 @@ use once_cell::unsync::Lazy;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CrystalView {
     MainMenu,
+    Dratini,
     Rng,
     Party,
     Wild,
@@ -43,6 +44,16 @@ const MENU: &[MenuOption<CrystalView>] = &[
     MenuOption::new(CrystalView::HelpMenu, "Help"),
 ];
 
+const ENGLISH_MENU: &[MenuOption<CrystalView>] = &[
+    MenuOption::new(CrystalView::Rng, "RNG"),
+    MenuOption::new(CrystalView::Dratini, "Dratini RNG"),
+    MenuOption::new(CrystalView::Party, "Party"),
+    MenuOption::new(CrystalView::Wild, "Wild"),
+    MenuOption::new(CrystalView::Egg, "Egg"),
+    MenuOption::new(CrystalView::Research, "Research"),
+    MenuOption::new(CrystalView::HelpMenu, "Help"),
+];
+
 unsafe fn get_state() -> &'static mut PersistedState {
     static mut STATE: Lazy<PersistedState> = Lazy::new(|| PersistedState {
         frame: 0,
@@ -50,7 +61,11 @@ unsafe fn get_state() -> &'static mut PersistedState {
         view: CrystalView::MainMenu,
         party_menu: SubMenu::new(1, 6),
         help_menu: HelpMenu::default(),
-        main_menu: Menu::new(MENU),
+        main_menu: Menu::new(if super::dratini::english() {
+            ENGLISH_MENU
+        } else {
+            MENU
+        }),
     });
     Lazy::force_mut(&mut STATE)
 }
@@ -72,15 +87,22 @@ pub fn run_frame() {
         _ => state.frame.wrapping_add(1),
     };
 
+    super::dratini::tick(&reader);
     if !state.show_view.check() {
+        super::dratini::cancel();
         return;
     }
 
     let is_locked = state.main_menu.update_lock();
+    let previous_view = state.view;
     state.view = state.main_menu.next_view(CrystalView::MainMenu, state.view);
+    if previous_view == CrystalView::Dratini && state.view != previous_view {
+        super::dratini::cancel();
+    }
     draw_header(CrystalView::MainMenu, state.view, is_locked);
 
     match state.view {
+        CrystalView::Dratini => super::dratini::draw(&reader, is_locked),
         CrystalView::Rng => draw_rng(&reader),
         CrystalView::Wild => draw_pkx(&reader.wild()),
         CrystalView::Party => {

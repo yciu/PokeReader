@@ -1,4 +1,5 @@
 extern "C" {
+    pub fn host_request_pause();
     pub fn host_print(ptr: u32, size: u32, color: u32);
     pub fn host_read_mem(game_addr: u32, size: u32, out_ptr: u32);
     pub fn host_write_mem(game_addr: u32, size: u32, in_ptr: u32);
@@ -16,8 +17,10 @@ extern "C" {
     pub fn is_memory_mapped(addr: u32) -> bool;
 }
 
-#[cfg(feature = "test_stubs")]
+#[cfg(any(test, feature = "test_stubs"))]
 pub mod test_stubs {
+    #[no_mangle]
+    pub extern "C" fn host_request_pause() {}
     #[no_mangle]
     pub extern "C" fn host_print(_ptr: u32, _size: u32, _color: u32) {}
     #[no_mangle]
@@ -59,7 +62,7 @@ pub mod test_stubs {
         0
     }
     #[no_mangle]
-    pub extern "C" fn pa_from_va_ptr(ptr: u32) -> u32 {
+    pub extern "C" fn pa_from_va_ptr(_ptr: u32) -> u32 {
         0
     }
     #[no_mangle]

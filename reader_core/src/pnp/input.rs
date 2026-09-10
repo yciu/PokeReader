@@ -5,6 +5,11 @@ use core::{
 };
 use num_enum::IntoPrimitive;
 
+/// Request the existing host pause loop. Changes only the plugin's pause flag.
+pub fn request_pause() {
+    unsafe { bindings::host_request_pause() }
+}
+
 /// A button that can be pressed by a user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive)]
 #[repr(u32)]
