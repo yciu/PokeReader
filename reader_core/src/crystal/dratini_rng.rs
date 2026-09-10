@@ -1,4 +1,5 @@
-//! Pure, allocation-free filters and manual receipt validation. No RNG predictor.
+//! Pure, allocation-free calibration evidence, filters and receipt validation.
+//! Missing claim-time state prevents a justified deterministic predictor.
 
 pub const SHINY_ATTACKS: [u8; 8] = [2, 3, 6, 7, 10, 11, 14, 15];
 
@@ -151,9 +152,276 @@ pub fn claim_progress(
     }
 }
 
+/// A copy of the ordinary frame observation, not a generation-time snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    pub state: u16,
+    pub advance: u32,
+    pub adiv: (Option<usize>, u8),
+    pub sdiv: (Option<usize>, u8),
+}
+impl Snapshot {
+    pub fn tracked(self) -> bool {
+        matches!(self.adiv.0, Some(0..=0x3fff)) && matches!(self.sdiv.0, Some(0..=0x3fff))
+    }
+    fn same_observed_state(self, other: Self) -> bool {
+        // The counter is plugin bookkeeping, not a component of the game's RNG.
+        self.state == other.state && self.adiv == other.adiv && self.sdiv == other.sdiv
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Sample {
+    pub start: Snapshot,
+    pub end: Snapshot,
+    pub party_count: u8,
+    pub dvs: Dvs,
+    pub move4: u8,
+}
+impl Sample {
+    fn comparable(self, other: Self) -> bool {
+        self.party_count == other.party_count && self.start.same_observed_state(other.start)
+    }
+}
+pub const SAMPLE_CAPACITY: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureResult {
+    Stored,
+    Full,
+    Invalid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PredictionBlocker {
+    MoreSamples,
+    ConflictingOutcomes,
+    UnobservedTiming,
+}
+impl PredictionBlocker {
+    pub fn explanation(self) -> &'static str {
+        match self {
+            Self::MoreSamples => "Need multiple natural claims",
+            Self::ConflictingOutcomes => "Same observed state, different DVs",
+            Self::UnobservedTiming => "Claim timing / DIV reads unobserved",
+        }
+    }
+}
+
+/// Evidence log, not a fitted RNG model. Only completed natural claims are added
+/// by the UI path. Never evict conflicts, infer an offset or turn repeats into a
+/// predictor. These observations cannot establish the hidden input/cycle phase.
+#[derive(Default)]
+pub struct Calibration {
+    samples: [Option<Sample>; SAMPLE_CAPACITY],
+    len: usize,
+}
+impl Calibration {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn full(&self) -> bool {
+        self.len == SAMPLE_CAPACITY
+    }
+    pub fn sample(&self, index: usize) -> Option<Sample> {
+        self.samples.get(index).copied().flatten()
+    }
+    pub fn record(&mut self, sample: Sample, species: u8, level: u8) -> CaptureResult {
+        if species != 147
+            || level != 15
+            || !(1..6).contains(&sample.party_count)
+            || !sample.start.tracked()
+            || sample.end.advance < sample.start.advance
+        {
+            return CaptureResult::Invalid;
+        }
+        if self.full() {
+            return CaptureResult::Full;
+        }
+        self.samples[self.len] = Some(sample);
+        self.len += 1;
+        CaptureResult::Stored
+    }
+    /// Pair counts describe observed reproducibility only. Different setup or
+    /// hidden phase can explain a conflict; neither is silently discarded.
+    pub fn comparisons(&self) -> (usize, usize) {
+        let mut matches = 0;
+        let mut conflicts = 0;
+        for i in 0..self.len {
+            for j in 0..i {
+                let a = self.samples[i].unwrap();
+                let b = self.samples[j].unwrap();
+                if a.comparable(b) {
+                    if a.dvs == b.dvs {
+                        matches += 1;
+                    } else {
+                        conflicts += 1;
+                    }
+                }
+            }
+        }
+        (matches, conflicts)
+    }
+    pub fn prediction_blocker(&self) -> PredictionBlocker {
+        if self.comparisons().1 != 0 {
+            PredictionBlocker::ConflictingOutcomes
+        } else if self.len < 3 {
+            PredictionBlocker::MoreSamples
+        } else {
+            // Three is only a minimum evidence count, never an unlock threshold.
+            PredictionBlocker::UnobservedTiming
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn fixture_sample() -> Sample {
+        let start = Snapshot {
+            state: 0x9fe3,
+            advance: 100,
+            adiv: (Some(468), 0x78),
+            sdiv: (Some(16139), 0x78),
+        };
+        Sample {
+            start,
+            end: Snapshot {
+                advance: 500,
+                ..start
+            },
+            party_count: 3,
+            dvs: Dvs(0x20, 0x31),
+            move4: 0xf5,
+        }
+    }
+
+    #[test]
+    fn calibration_keeps_unfiltered_receipts_and_rejects_invalid_capture() {
+        let mut c = Calibration::default();
+        let sample = fixture_sample();
+        assert_eq!(c.record(sample, 148, 15), CaptureResult::Invalid);
+        assert_eq!(c.record(sample, 147, 16), CaptureResult::Invalid);
+        for party_count in [0, 6, 255] {
+            assert_eq!(
+                c.record(
+                    Sample {
+                        party_count,
+                        ..sample
+                    },
+                    147,
+                    15
+                ),
+                CaptureResult::Invalid
+            );
+        }
+        for index in [None, Some(0x4000)] {
+            let start = Snapshot {
+                adiv: (index, 0),
+                ..sample.start
+            };
+            assert_eq!(
+                c.record(Sample { start, ..sample }, 147, 15),
+                CaptureResult::Invalid
+            );
+            let start = Snapshot {
+                sdiv: (index, 0),
+                ..sample.start
+            };
+            assert_eq!(
+                c.record(Sample { start, ..sample }, 147, 15),
+                CaptureResult::Invalid
+            );
+        }
+        let end = Snapshot {
+            advance: 99,
+            ..sample.end
+        };
+        assert_eq!(
+            c.record(Sample { end, ..sample }, 147, 15),
+            CaptureResult::Invalid
+        );
+        assert_eq!(c.len(), 0);
+        assert_eq!(c.record(sample, 147, 15), CaptureResult::Stored);
+        let missing_move = Sample {
+            move4: 0xef,
+            ..sample
+        };
+        assert_eq!(c.record(missing_move, 147, 15), CaptureResult::Stored);
+        assert_eq!(c.sample(1).unwrap().move4, 0xef);
+        assert_eq!(c.sample(0).unwrap().dvs, sample.dvs);
+        assert!(!sample.dvs.shiny());
+        assert!(c.sample(SAMPLE_CAPACITY).is_none());
+    }
+
+    #[test]
+    fn repeatability_never_substitutes_for_missing_claim_timing() {
+        let mut c = Calibration::default();
+        assert_eq!(c.prediction_blocker(), PredictionBlocker::MoreSamples);
+        for n in 0..SAMPLE_CAPACITY {
+            let mut sample = fixture_sample();
+            // Same observed state, different plugin counter / completion latency.
+            sample.start.advance += n as u32;
+            sample.end.advance += n as u32 * 10;
+            assert_eq!(c.record(sample, 147, 15), CaptureResult::Stored);
+            assert_eq!(
+                c.prediction_blocker(),
+                if n < 2 {
+                    PredictionBlocker::MoreSamples
+                } else {
+                    PredictionBlocker::UnobservedTiming
+                }
+            );
+        }
+        assert_eq!(c.comparisons(), (120, 0));
+        assert!(c.full());
+        assert_eq!(c.record(fixture_sample(), 147, 15), CaptureResult::Full);
+        assert_eq!(c.len(), SAMPLE_CAPACITY);
+    }
+
+    #[test]
+    fn conflicting_natural_outcome_is_retained_and_blocks_prediction() {
+        let mut c = Calibration::default();
+        let sample = fixture_sample();
+        assert_eq!(c.record(sample, 147, 15), CaptureResult::Stored);
+        assert_eq!(
+            c.record(
+                Sample {
+                    dvs: Dvs(0xfa, 0xaa),
+                    ..sample
+                },
+                147,
+                15
+            ),
+            CaptureResult::Stored
+        );
+        for _ in 2..SAMPLE_CAPACITY {
+            assert_eq!(c.record(sample, 147, 15), CaptureResult::Stored);
+        }
+        assert_eq!(c.prediction_blocker(), PredictionBlocker::ConflictingOutcomes);
+        assert_eq!(c.comparisons().1, 15);
+        assert_eq!(c.record(sample, 147, 15), CaptureResult::Full);
+        assert_eq!(c.sample(1).unwrap().dvs, Dvs(0xfa, 0xaa));
+    }
+
+    #[test]
+    fn different_observed_states_do_not_count_as_repeated_trials() {
+        let mut c = Calibration::default();
+        for n in 0..6 {
+            let mut sample = fixture_sample();
+            match n {
+                1 => sample.start.state ^= 1,
+                2 => sample.start.adiv.0 = Some(469),
+                3 => sample.start.sdiv.0 = Some(16140),
+                4 => sample.start.adiv.1 ^= 1,
+                5 => sample.party_count = 4,
+                _ => (),
+            }
+            assert_eq!(c.record(sample, 147, 15), CaptureResult::Stored);
+        }
+        assert_eq!(c.comparisons(), (0, 0));
+        assert_eq!(c.prediction_blocker(), PredictionBlocker::UnobservedTiming);
+    }
     #[test]
     fn shiny_all_65536_spreads() {
         let mut count = 0;

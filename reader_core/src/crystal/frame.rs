@@ -79,7 +79,8 @@ pub fn run_frame() {
     // A lock hinders performance too much on a 3ds.
     let state = unsafe { get_state() };
 
-    state.frame = match (measured_div(), reader.rng_state()) {
+    let rng_state = reader.rng_state();
+    state.frame = match (measured_div(), rng_state) {
         (0x0101, 0x01ff) => {
             reset_rng_advance();
             1
@@ -87,7 +88,8 @@ pub fn run_frame() {
         _ => state.frame.wrapping_add(1),
     };
 
-    super::dratini::tick(&reader);
+    let observation = super::dratini::snapshot(rng_state);
+    super::dratini::tick(&reader, observation);
     if !state.show_view.check() {
         super::dratini::cancel();
         return;
@@ -102,7 +104,7 @@ pub fn run_frame() {
     draw_header(CrystalView::MainMenu, state.view, is_locked);
 
     match state.view {
-        CrystalView::Dratini => super::dratini::draw(&reader, is_locked),
+        CrystalView::Dratini => super::dratini::draw(&reader, is_locked, observation),
         CrystalView::Rng => draw_rng(&reader),
         CrystalView::Wild => draw_pkx(&reader.wild()),
         CrystalView::Party => {
